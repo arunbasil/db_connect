@@ -1,58 +1,65 @@
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.ResultSet;
-import java.sql.Statement;
-import java.util.HashSet;
-import java.util.Set;
-import java.util.logging.Logger;
-import java.util.stream.Collectors;
+public class DatabaseSteps {
 
-public class AccountComparison {
+    private ResultSet pgResultSet;
+    private ResultSet db2ResultSet;
 
-    // Logger setup
-    private static final Logger logger = Logger.getLogger(AccountComparison.class.getName());
+    @When("I fetch data from both databases")
+    public void fetchData() throws Exception {
+        // Fetch data from PostgreSQL
+        Statement pgStatement = pgConnection.createStatement();
+        pgResultSet = pgStatement.executeQuery("SELECT account_no FROM public.bst_account LIMIT 5;");
+        while (pgResultSet.next()) {
+            logger.info("PostgreSQL Data: {}", pgResultSet.getString("account_no"));
+        }
 
-    public static void main(String[] args) {
-        Set<String> accountsFromDb1 = fetchAccountsFromDatabase("jdbc:postgresql://localhost:5432/db1", "user1", "password1");
-        Set<String> accountsFromDb2 = fetchAccountsFromDatabase("jdbc:postgresql://localhost:5432/db2", "user2", "password2");
+        // Fetch data from Db2
+        Statement db2Statement = db2Connection.createStatement();
+        db2ResultSet = db2Statement.executeQuery("SELECT account_no FROM ISGEND1.BST_ACCOUNT WHERE ACCOUNT_TYPE ='C' AND DATE(LAST_UPDT_TSTAMP) >= DATE('2023-12-13') FETCH FIRST 5 ROWS ONLY");
+        while (db2ResultSet.next()) {
+            logger.info("Db2 Data: {}", db2ResultSet.getString("account_no"));
+        }
+    }
 
-        if (accountsFromDb1 == null || accountsFromDb2 == null) {
-            logger.severe("Failed to fetch accounts from one or both databases.");
+    @Then("I should be able to compare the data successfully")
+    public void compareData() throws SQLException {
+        if (pgResultSet == null || db2ResultSet == null) {
+            logger.error("Failed to fetch accounts from one or both databases.");
             return;
         }
 
-        // Find accounts missing in DB2
-        Set<String> missingInDb2 = accountsFromDb1.stream()
-                .filter(account -> !accountsFromDb2.contains(account))
-                .collect(Collectors.toSet());
+        try {
+            // Convert ResultSets to Lists
+            List<String> pgAccounts = resultSetToList(pgResultSet);
+            List<String> db2Accounts = resultSetToList(db2ResultSet);
 
-        // Find accounts missing in DB1
-        Set<String> missingInDb1 = accountsFromDb2.stream()
-                .filter(account -> !accountsFromDb1.contains(account))
-                .collect(Collectors.toSet());
+            // Find accounts missing in DB2 (while preserving duplicates)
+            List<String> missingInDb2 = pgAccounts.stream()
+                .filter(account -> !db2Accounts.remove(account))
+                .collect(Collectors.toList());
 
-        // Log missing accounts
-        missingInDb2.forEach(account -> logger.info("Account missing in DB2: " + account));
-        missingInDb1.forEach(account -> logger.info("Account missing in DB1: " + account));
+            // Find accounts missing in PG (while preserving duplicates)
+            List<String> missingInPg = db2Accounts.stream()
+                .filter(account -> !pgAccounts.remove(account))
+                .collect(Collectors.toList());
+
+            // Log missing accounts
+            missingInDb2.forEach(account -> logger.info("Account missing in DB2: " + account));
+            missingInPg.forEach(account -> logger.info("Account missing in PG: " + account));
+            
+            logger.info("Data comparison completed successfully.");
+
+        } catch (SQLException e) {
+            logger.error("Error processing ResultSet", e);
+        }
     }
 
-    // Fetch accounts from a specific database
-    private static Set<String> fetchAccountsFromDatabase(String url, String username, String password) {
-        Set<String> accountNumbers = new HashSet<>();
-
-        try (Connection connection = DriverManager.getConnection(url, username, password);
-             Statement statement = connection.createStatement();
-             ResultSet resultSet = statement.executeQuery("SELECT account_no FROM accounts")) {
-
-            while (resultSet.next()) {
-                accountNumbers.add(resultSet.getString("account_no"));
-            }
-
-        } catch (Exception e) {
-            logger.severe("Error fetching accounts from database: " + e.getMessage());
-            return null;
+    // Helper method to convert ResultSet to List
+    private List<String> resultSetToList(ResultSet resultSet) throws SQLException {
+        List<String> resultSetData = new ArrayList<>();
+        while (resultSet.next()) {
+            // Assuming the column name is "account_no"
+            resultSetData.add(resultSet.getString("account_no"));
         }
-
-        return accountNumbers;
+        return resultSetData;
     }
 }
